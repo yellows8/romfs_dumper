@@ -13,6 +13,8 @@ Result dump_file(char *outpath, char *inpath, size_t filesize)
 	size_t pos, chunksize = 0x400000;
 	size_t transfersize;
 
+	if(filesize>0x1000)filesize = 0x1000;
+
 	printf("Dumping file...\n");
 
 	finput = fopen(inpath, "rb");
@@ -148,6 +150,7 @@ Result dump_romfs(u32 contentindex)
 {
 	Result ret=0;
 	Handle romFS_file=0;
+	Handle fsuHandle=0;
 	u32 procid=0;
 	FS_ProgramInfo programinfo;
 
@@ -163,17 +166,52 @@ Result dump_romfs(u32 contentindex)
 
 	snprintf(str, sizeof(str)-1, "output_programid_%016llx_x%02x/", (unsigned long long)programinfo.programId, (unsigned int)contentindex);
 
-	u32 lowpath[0x14>>2];
-	memset(lowpath, 0, sizeof(lowpath));
-	lowpath[1] = contentindex;
+	if(contentindex==0)
+	{
+		ret = srvGetServiceHandleDirect(&fsuHandle, "fs:USER");
+		if (R_SUCCEEDED(ret))
+		{
+			ret = FSUSER_Initialize(fsuHandle);
+			if (R_FAILED(ret)) svcCloseHandle(fsuHandle);
+		}
+		if (R_FAILED(ret))return ret;
 
-	FS_Archive arch = { ARCHIVE_SAVEDATA_AND_CONTENT, { PATH_BINARY, sizeof(programinfo), &programinfo }, 0 };
-	FS_Path path = { PATH_BINARY, sizeof(lowpath), lowpath };
+		fsUseSession(fsuHandle, false);
+	}
 
-	ret = FSUSER_OpenFileDirectly(&romFS_file, arch, path, FS_OPEN_READ, 0);
+	if(contentindex)
+	{
+		u32 lowpath[0x14>>2];
+		memset(lowpath, 0, sizeof(lowpath));
+		lowpath[1] = contentindex;
+
+		FS_Archive arch = { ARCHIVE_SAVEDATA_AND_CONTENT, { PATH_BINARY, sizeof(programinfo), &programinfo }, 0 };
+		FS_Path path = { PATH_BINARY, sizeof(lowpath), lowpath };
+
+		ret = FSUSER_OpenFileDirectly(&romFS_file, arch, path, FS_OPEN_READ, 0);
+	}
+	else
+	{
+		u32 arch_lowpath[0x10>>2];
+		u32 lowpath[0xC>>2];
+		memset(arch_lowpath, 0, sizeof(arch_lowpath));
+		memset(lowpath, 0, sizeof(lowpath));
+		FS_Archive arch = { ARCHIVE_ROMFS, { PATH_EMPTY, 1, (u8*)"" }, 0 };
+		FS_Path path = { PATH_BINARY, sizeof(lowpath), lowpath };
+
+		ret = FSUSER_OpenFileDirectly(&romFS_file, arch, path, FS_OPEN_READ, 0);
+	}
+
 	if (R_SUCCEEDED(ret))ret = romfsInitFromFile(romFS_file, 0);
 
 	if (R_SUCCEEDED(ret))ret = dump_filesystem(str, "romfs:/");
+
+	if(contentindex==0)
+	{
+		fsEndUseSession();
+
+		svcCloseHandle(fsuHandle);
+	}
 
 	return ret;
 }
@@ -186,7 +224,7 @@ int main(int argc, char **argv)
 
 	consoleInit(GFX_TOP, NULL);
 
-	ret = dump_romfs(2);
+	ret = dump_romfs(0);
 	printf("dump_romfs() returned 0x%08x.\n", (unsigned int)ret);
 
 	printf("Press START to exit.\n");
